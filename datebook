@@ -1,0 +1,79 @@
+#!/usr/bin/env ruby
+
+require 'chronic'
+require 'date'
+require 'io/console'
+require 'slop'
+require 'yaml/store'
+
+TIME_FORMAT = '%a, %b %d at %I:%M%P'
+USAGE = 'Usage: datebook [DATE_OR_TIME]'
+VERSION = '0.0.0'
+
+Opts = Slop.parse do |o|
+  o.banner = USAGE
+  o.bool '-r', '--remove', 'specify date or time of event to remove'
+  o.bool '-l', '--list', 'list all events'
+  o.on('-h', '--help') { puts o; exit }
+  o.on('-v', '--version') { puts "datebook #{VERSION}"; exit }
+end
+
+Datebook = YAML::Store.new File.join Dir.home, '.datebook.yaml'
+
+def parse_time
+  parsed_input = Chronic.parse Opts.arguments.join ' '
+  abort "ERROR: Unable to parse as a time: #{input}" unless parsed_input
+  rounded_time = parsed_input.round
+
+  rounded_time - rounded_time.sec - rounded_time.min % 15 * 60
+end
+
+if Opts[:remove]
+  time = parse_time
+  formatted_time = time.strftime TIME_FORMAT
+
+  Datebook.transaction do
+    if Datebook.root? time
+      puts "Removing event on #{formatted_time}:\n\t#{Datebook[time]}"
+
+      Datebook.delete time
+
+      puts "Event successfully removed."
+    else
+      abort "ERROR: No events found for #{formatted_time}."
+    end
+  end
+elsif Opts[:list]
+  Datebook.transaction do
+    now = Time.now
+
+    Datebook.roots.sort.each do |time|
+      next if time < now
+      puts "#{time.strftime TIME_FORMAT}: #{Datebook[time]}"
+    end
+  end
+elsif Opts.arguments.empty?
+  abort Opts.to_s
+else
+  time = parse_time
+
+  Datebook.transaction do
+    if Datebook.root? time
+      puts "There's already an event right then:\n\t#{Datebook[time]}"
+      puts "\nPress ctrl-c to abort or Enter to replace this event."
+
+      loop do
+        case STDIN.getch
+        when "\r" then break puts
+        when "\u0003" then abort
+        end
+      end
+    end
+  end
+
+  puts time.strftime TIME_FORMAT
+  print "Event: "
+  title = STDIN.gets.chomp
+
+  Datebook.transaction { Datebook[time] = title }
+end
